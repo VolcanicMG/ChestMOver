@@ -1,0 +1,6 @@
+displayName = Chest Mover
+author = Volcanic
+version = 0.1
+hideCode = true
+hideResources = true
+includePDB = true
