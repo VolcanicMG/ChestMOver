@@ -14,23 +14,29 @@ namespace ChestMover
 {
     public class ChestMoverPlayer : ModPlayer
     {
-        public static int[] itemList = new int[40];
-        public static int[] itemStackList = new int[40];
-        public static short ChestType = 0;
-        public static string ChestName;
+        public int[] itemList = new int[40];
+        public int[] itemStackList = new int[40];
+        public short ChestType = 0;
+        public string ChestName;
 
         private int inventorySpot;
         private bool firstTick;
 
         public bool GotChest;
 
+        public Vector2 mousePos;
+        public float dist;
+
         public override void PreUpdate()
         {
-            Vector2 mousePos = Main.MouseWorld;
-            float dist = Vector2.Distance(player.Center, mousePos);
+            if (Main.netMode != NetmodeID.Server && player.whoAmI == Main.myPlayer)
+            {
+                mousePos = Main.MouseWorld;
+                dist = Vector2.Distance(player.Center, mousePos);
+            }
 
             //Picking up the chest
-            if (!GotChest && Main.mouseLeft && Main.tile[(int)mousePos.X / 16, (int)mousePos.Y / 16].type == TileID.Containers && dist / 16f <= 4 && player.inventory[player.selectedItem].type == 0 && Main.netMode != NetmodeID.Server)
+            if (!GotChest && Main.mouseLeft && Main.tile[(int)mousePos.X / 16, (int)mousePos.Y / 16].type == TileID.Containers && dist / 16f <= 4 && player.inventory[player.selectedItem].type == 0 && Main.netMode != NetmodeID.Server && player.whoAmI == Main.myPlayer)
             {
                 foreach (Chest chest in Main.chest)
                 {
@@ -66,34 +72,8 @@ namespace ChestMover
                             item.TurnToAir();
                         }
 
-                        //Destroy the chest without it dropping the item - Move to a separate method to clean up the code a bit TODO
-                        Chest.DestroyChest((int)ChestPos.X, (int)ChestPos.Y);
-
-                        Main.tile[(int)ChestPos.X, (int)ChestPos.Y].ClearTile();
-                        Main.tile[(int)ChestPos.X, (int)ChestPos.Y].active(false);
-                        NetMessage.SendData(MessageID.TileChange, -1, -1, null, 2, (float)ChestPos.X, (float)ChestPos.Y, 0f, 0, 0, 0);
-
-                        Main.tile[(int)ChestPos.X + 1, (int)ChestPos.Y + 1].ClearTile();
-                        Main.tile[(int)ChestPos.X + 1, (int)ChestPos.Y + 1].active(false);
-                        NetMessage.SendData(MessageID.TileChange, -1, -1, null, 2, (float)ChestPos.X + 1, (float)ChestPos.Y + 1, 0f, 0, 0, 0);
-
-                        Main.tile[(int)ChestPos.X + 1, (int)ChestPos.Y].ClearTile();
-                        Main.tile[(int)ChestPos.X + 1, (int)ChestPos.Y].active(false);
-                        NetMessage.SendData(MessageID.TileChange, -1, -1, null, 2, (float)ChestPos.X + 1, (float)ChestPos.Y, 0f, 0, 0, 0);
-
-                        Main.tile[(int)ChestPos.X, (int)ChestPos.Y + 1].ClearTile();
-                        Main.tile[(int)ChestPos.X, (int)ChestPos.Y + 1].active(false);
-                        NetMessage.SendData(MessageID.TileChange, -1, -1, null, 2, (float)ChestPos.X, (float)ChestPos.Y + 1, 0f, 0, 0, 0);
-
-                        WorldGen.SquareTileFrame((int)ChestPos.X, (int)ChestPos.Y, true);
-                        WorldGen.SquareTileFrame((int)ChestPos.X + 1, (int)ChestPos.Y + 1, true);
-                        WorldGen.SquareTileFrame((int)ChestPos.X + 1, (int)ChestPos.Y, true);
-                        WorldGen.SquareTileFrame((int)ChestPos.X, (int)ChestPos.Y + 1, true);
-
-                        ////net stuff
-                        //int number = Chest.FindChest((int)ChestPos.X, (int)ChestPos.Y);
-                        //NetMessage.SendData(34, -1, -1, null, 101, (float)ChestPos.X, (float)ChestPos.Y, 0f, number, Main.tile[(int)ChestPos.X, (int)ChestPos.Y].type, 0);
-                        //NetMessage.SendTileSquare(-1, (int)ChestPos.X, (int)ChestPos.Y, 3, TileChangeType.None);
+                        //Destroy the chest
+                        DestroyChestWhole((int)ChestPos.X, (int)ChestPos.Y);
 
                         //Create pickup sound
                         Main.PlaySound(SoundID.DoorOpen, (int)player.Center.X, (int)player.Center.Y);
@@ -107,50 +87,50 @@ namespace ChestMover
 
         public override void PostUpdate()
         {
-            Vector2 mousePos = Main.MouseWorld;
-            float dist = Vector2.Distance(player.Center, mousePos);
-
-            if (GotChest && Main.mouseRight && Main.mouseRightRelease && dist / 16f <= 4 && Main.netMode != NetmodeID.Server) //Issues with mp
+            if (Main.netMode != NetmodeID.Server && player.whoAmI == Main.myPlayer)
             {
-                Vector2 NewChestPos = new Vector2((int)mousePos.X / 16, (int)mousePos.Y / 16);
-
-                if (CheckChestPlacing((int)NewChestPos.X, (int)NewChestPos.Y))
+                if (GotChest && Main.mouseRight && Main.mouseRightRelease && dist / 16f <= 4) //Issues with mp
                 {
-                    PlaceChest((int)NewChestPos.X, (int)NewChestPos.Y);
-                    //WorldGen.SquareTileFrame((int)NewChestPos.X, (int)NewChestPos.Y, true);
+                    Vector2 NewChestPos = new Vector2((int)mousePos.X / 16, (int)mousePos.Y / 16);
 
-                    GotChest = false;
+                    if (CheckChestPlacing((int)NewChestPos.X, (int)NewChestPos.Y))
+                    {
+                        PlaceChest((int)NewChestPos.X, (int)NewChestPos.Y);
+                        //WorldGen.SquareTileFrame((int)NewChestPos.X, (int)NewChestPos.Y, true);
 
-                    //Create dropoff sound
-                    Main.PlaySound(SoundID.DoorClosed, (int)player.Center.X, (int)player.Center.Y);
-                }
-                else Main.PlaySound(SoundID.Duck, (int)player.Center.X, (int)player.Center.Y);
-            }
+                        GotChest = false;
 
-            if (GotChest && dist / 16f <= 4)
-            {
-
-                TileObject tileObject = default(TileObject);
-                TileObject.CanPlace(Player.tileTargetX, Player.tileTargetY, 21, (ChestType / 36), 1, out tileObject, true);
-
-                if (!firstTick)
-                {
-                    player.inventory[inventorySpot].SetDefaults(ModContent.ItemType<Box>());
-                    firstTick = true;
-                }
-            }
-
-            if (GotChest) player.AddBuff(ModContent.BuffType<MovingDebuff>(), 10);
-
-
-            //Remove the item once the player gets done
-            if (!GotChest)
-            {
-                foreach (Item slot in player.inventory)
-                {
-                    if (slot.type == ModContent.ItemType<Box>()) slot.SetDefaults(0);
+                        //Create dropoff sound
+                        Main.PlaySound(SoundID.DoorClosed, (int)player.Center.X, (int)player.Center.Y);
+                    }
+                    else Main.PlaySound(SoundID.Duck, (int)player.Center.X, (int)player.Center.Y);
                 }
 
+                if (GotChest && dist / 16f <= 4)
+                {
+
+                    TileObject tileObject = default(TileObject);
+                    TileObject.CanPlace(Player.tileTargetX, Player.tileTargetY, 21, (ChestType / 36), 1, out tileObject, true);
+
+                    if (!firstTick)
+                    {
+                        player.inventory[inventorySpot].SetDefaults(ModContent.ItemType<Box>());
+                        firstTick = true;
+                    }
+                }
+
+                if (GotChest) player.AddBuff(ModContent.BuffType<MovingDebuff>(), 10);
+
+
+                //Remove the item once the player gets done
+                if (!GotChest)
+                {
+                    foreach (Item slot in player.inventory)
+                    {
+                        if (slot.type == ModContent.ItemType<Box>()) slot.SetDefaults(0);
+                    }
+
+                }
             }
 
         }
@@ -207,17 +187,16 @@ namespace ChestMover
 
                 ChestMoverPlayer mp = drawPlayer.CM();
                 Texture2D Chest = GetTexture("ChestMover/Images/ChestImagesInvis");
-                float dist = Vector2.Distance(drawPlayer.Center, mousePos);
 
-                if (dist / 16f <= 4)
+                if (drawPlayer.CM().dist / 16f <= 4)
                 {
                     int drawX = (int)(mousePos.X - Main.screenPosition.X + 42);
                     int drawY = (int)(mousePos.Y - Main.screenPosition.Y + 8);
 
-                    DrawData dataTopInvis = new DrawData(Chest, new Vector2(drawX, drawY), new Rectangle(ChestType, 0, 16, 16), new Microsoft.Xna.Framework.Color(255, 255, 255), 0f, new Vector2(0, 0), 1f, mp.effect, 0);
-                    DrawData dataTopRightInvis = new DrawData(Chest, new Vector2(drawX + 16, drawY), new Rectangle(ChestType + 18, 0, 16, 16), new Microsoft.Xna.Framework.Color(255, 255, 255), 0f, new Vector2(0, 0), 1f, mp.effect, 0);
-                    DrawData dataBottomInvis = new DrawData(Chest, new Vector2(drawX, drawY + 16), new Rectangle(ChestType, 18, 16, 18), new Microsoft.Xna.Framework.Color(255, 255, 255), 0f, new Vector2(0, 0), 1f, mp.effect, 0);
-                    DrawData dataBottomRightInvis = new DrawData(Chest, new Vector2(drawX + 16, drawY + 16), new Rectangle(ChestType + 18, 18, 16, 18), new Microsoft.Xna.Framework.Color(255, 255, 255), 0f, new Vector2(0, 0), 1f, mp.effect, 0);
+                    DrawData dataTopInvis = new DrawData(Chest, new Vector2(drawX, drawY), new Rectangle(drawPlayer.CM().ChestType, 0, 16, 16), new Microsoft.Xna.Framework.Color(255, 255, 255), 0f, new Vector2(0, 0), 1f, mp.effect, 0);
+                    DrawData dataTopRightInvis = new DrawData(Chest, new Vector2(drawX + 16, drawY), new Rectangle(drawPlayer.CM().ChestType + 18, 0, 16, 16), new Microsoft.Xna.Framework.Color(255, 255, 255), 0f, new Vector2(0, 0), 1f, mp.effect, 0);
+                    DrawData dataBottomInvis = new DrawData(Chest, new Vector2(drawX, drawY + 16), new Rectangle(drawPlayer.CM().ChestType, 18, 16, 18), new Microsoft.Xna.Framework.Color(255, 255, 255), 0f, new Vector2(0, 0), 1f, mp.effect, 0);
+                    DrawData dataBottomRightInvis = new DrawData(Chest, new Vector2(drawX + 16, drawY + 16), new Rectangle(drawPlayer.CM().ChestType + 18, 18, 16, 18), new Microsoft.Xna.Framework.Color(255, 255, 255), 0f, new Vector2(0, 0), 1f, mp.effect, 0);
 
                     Main.playerDrawData.Add(dataTopInvis);
                     Main.playerDrawData.Add(dataTopRightInvis);
@@ -248,10 +227,10 @@ namespace ChestMover
                 int drawX = (int)(info.position.X + drawPlayer.width / 2f - Main.screenPosition.X + 5);
                 int drawY = (int)(info.position.Y + drawPlayer.height / 2f - Main.screenPosition.Y - 20);
 
-                DrawData dataTop = new DrawData(Chest, new Vector2(drawX + mp.offset, drawY), new Rectangle(ChestType, 0, 16, 16), new Microsoft.Xna.Framework.Color(255, 255, 255), 0f, new Vector2(0, 0), 1f, mp.effect, 0);
-                DrawData dataTopRight = new DrawData(Chest, new Vector2(drawX + mp.offset + 16, drawY), new Rectangle(ChestType + 18, 0, 16, 16), new Microsoft.Xna.Framework.Color(255, 255, 255), 0f, new Vector2(0, 0), 1f, mp.effect, 0);
-                DrawData dataBottom = new DrawData(Chest, new Vector2(drawX + mp.offset, drawY + 16), new Rectangle(ChestType, 18, 16, 18), new Microsoft.Xna.Framework.Color(255, 255, 255), 0f, new Vector2(0, 0), 1f, mp.effect, 0);
-                DrawData dataBottomRight = new DrawData(Chest, new Vector2(drawX + mp.offset + 16, drawY + 16), new Rectangle(ChestType + 18, 18, 16, 18), new Microsoft.Xna.Framework.Color(255, 255, 255), 0f, new Vector2(0, 0), 1f, mp.effect, 0);
+                DrawData dataTop = new DrawData(Chest, new Vector2(drawX + mp.offset, drawY), new Rectangle(drawPlayer.CM().ChestType, 0, 16, 16), new Microsoft.Xna.Framework.Color(255, 255, 255), 0f, new Vector2(0, 0), 1f, mp.effect, 0);
+                DrawData dataTopRight = new DrawData(Chest, new Vector2(drawX + mp.offset + 16, drawY), new Rectangle(drawPlayer.CM().ChestType + 18, 0, 16, 16), new Microsoft.Xna.Framework.Color(255, 255, 255), 0f, new Vector2(0, 0), 1f, mp.effect, 0);
+                DrawData dataBottom = new DrawData(Chest, new Vector2(drawX + mp.offset, drawY + 16), new Rectangle(drawPlayer.CM().ChestType, 18, 16, 18), new Microsoft.Xna.Framework.Color(255, 255, 255), 0f, new Vector2(0, 0), 1f, mp.effect, 0);
+                DrawData dataBottomRight = new DrawData(Chest, new Vector2(drawX + mp.offset + 16, drawY + 16), new Rectangle(drawPlayer.CM().ChestType + 18, 18, 16, 18), new Microsoft.Xna.Framework.Color(255, 255, 255), 0f, new Vector2(0, 0), 1f, mp.effect, 0);
 
                 Main.playerDrawData.Add(dataTop);
                 Main.playerDrawData.Add(dataTopRight);
@@ -273,6 +252,53 @@ namespace ChestMover
         #endregion
 
         #region Methods
+        public static void DestroyChestWhole(int ChestPosX, int ChestPosY)
+        {
+            //Destroy the chest without it dropping the item - Move to a separate method to clean up the code a bit TODO
+            Chest.DestroyChest((int)ChestPosX, (int)ChestPosY);
+
+            Main.tile[(int)ChestPosX, (int)ChestPosY].ClearTile();
+            Main.tile[(int)ChestPosX, (int)ChestPosY].active(false);
+            Main.tile[(int)ChestPosX, (int)ChestPosY].type = 0;
+            Main.tile[(int)ChestPosX, (int)ChestPosY].inActive(false);
+            Main.tile[(int)ChestPosX, (int)ChestPosY].frameNumber(0);
+            Main.tile[(int)ChestPosX, (int)ChestPosY].frameX = -1;
+            Main.tile[(int)ChestPosX, (int)ChestPosY].frameY = -1;
+            NetMessage.SendData(MessageID.TileChange, -1, -1, null, 2, (float)ChestPosX, (float)ChestPosY, 0f, 0, 0, 0);
+
+            Main.tile[(int)ChestPosX + 1, (int)ChestPosY + 1].ClearTile();
+            Main.tile[(int)ChestPosX + 1, (int)ChestPosY + 1].active(false);
+            Main.tile[(int)ChestPosX + 1, (int)ChestPosY + 1].type = 0;
+            Main.tile[(int)ChestPosX + 1, (int)ChestPosY + 1].inActive(false);
+            Main.tile[(int)ChestPosX + 1, (int)ChestPosY + 1].frameNumber(0);
+            Main.tile[(int)ChestPosX + 1, (int)ChestPosY + 1].frameX = -1;
+            Main.tile[(int)ChestPosX + 1, (int)ChestPosY + 1].frameY = -1;
+            NetMessage.SendData(MessageID.TileChange, -1, -1, null, 2, (float)ChestPosX + 1, (float)ChestPosY + 1, 0f, 0, 0, 0);
+
+            Main.tile[(int)ChestPosX + 1, (int)ChestPosY].ClearTile();
+            Main.tile[(int)ChestPosX + 1, (int)ChestPosY].active(false);
+            Main.tile[(int)ChestPosX + 1, (int)ChestPosY].type = 0;
+            Main.tile[(int)ChestPosX + 1, (int)ChestPosY].inActive(false);
+            Main.tile[(int)ChestPosX + 1, (int)ChestPosY].frameNumber(0);
+            Main.tile[(int)ChestPosX + 1, (int)ChestPosY].frameX = -1;
+            Main.tile[(int)ChestPosX + 1, (int)ChestPosY].frameY = -1;
+            NetMessage.SendData(MessageID.TileChange, -1, -1, null, 2, (float)ChestPosX + 1, (float)ChestPosY, 0f, 0, 0, 0);
+
+            Main.tile[(int)ChestPosX, (int)ChestPosY + 1].ClearTile();
+            Main.tile[(int)ChestPosX, (int)ChestPosY + 1].active(false);
+            Main.tile[(int)ChestPosX, (int)ChestPosY + 1].type = 0;
+            Main.tile[(int)ChestPosX, (int)ChestPosY + 1].inActive(false);
+            Main.tile[(int)ChestPosX, (int)ChestPosY + 1].frameNumber(0);
+            Main.tile[(int)ChestPosX, (int)ChestPosY + 1].frameX = 1;
+            Main.tile[(int)ChestPosX, (int)ChestPosY + 1].frameY = -1;
+            NetMessage.SendData(MessageID.TileChange, -1, -1, null, 2, (float)ChestPosX, (float)ChestPosY + 1, 0f, 0, 0, 0);
+
+            WorldGen.SquareTileFrame((int)ChestPosX, (int)ChestPosY, true);
+            WorldGen.SquareTileFrame((int)ChestPosX + 1, (int)ChestPosY + 1, true);
+            WorldGen.SquareTileFrame((int)ChestPosX + 1, (int)ChestPosY, true);
+            WorldGen.SquareTileFrame((int)ChestPosX, (int)ChestPosY + 1, true);
+        }
+
         public static bool checkForChest2x2(Vector2 Chestpos, Vector2 mousepos)
         {
             if (Chestpos == mousepos ||
@@ -353,6 +379,7 @@ namespace ChestMover
 
         public static int CreateChest(int X, int Y, int id = -1)
         {
+            Player player = Main.player[Main.myPlayer];
 
             int num = id;
             if (num == -1)
@@ -378,18 +405,24 @@ namespace ChestMover
             //Add the items to the chest from the old
             for (int i = 0; i < 40; i++)
             {
-                Main.chest[num].item[i].SetDefaults(itemList[i]);
-                Main.chest[num].item[i].stack = itemStackList[i];
+                Main.chest[num].item[i].SetDefaults(player.CM().itemList[i]);
+                Main.chest[num].item[i].stack = player.CM().itemStackList[i];
 
             }
 
             //Set the chest to the chest type that was broken
-            Main.tile[X, Y].frameX = ChestType;
-            Main.tile[X + 1, Y + 1].frameX = (short)(ChestType + 18);
-            Main.tile[X + 1, Y].frameX = (short)(ChestType + 18);
-            Main.tile[X, Y + 1].frameX = ChestType;
+            Main.tile[X, Y].frameX = player.CM().ChestType;
+            Main.tile[X + 1, Y + 1].frameX = (short)(player.CM().ChestType + 18);
+            Main.tile[X + 1, Y].frameX = (short)(player.CM().ChestType + 18);
+            Main.tile[X, Y + 1].frameX = player.CM().ChestType;
 
-            Main.chest[num].name = ChestName;
+            Main.chest[num].name = player.CM().ChestName;
+
+            //netstuff
+            NetMessage.SendData(34, -1, -1, null, 0, (float)X, (float)Y, (float)(int)player.CM().ChestType / 16, 0, 0, 0);
+            NetMessage.SendData(34, -1, -1, null, 100, (float)X, (float)Y, (float)(int)player.CM().ChestType / 16, 0, 21, 0);
+
+            Chest.UpdateChestFrames();
 
             return num;
         }
