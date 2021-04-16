@@ -29,7 +29,7 @@ namespace ChestMover
 
         public override void PreUpdate()
         {
-            if (Main.netMode != NetmodeID.Server && player.whoAmI == Main.myPlayer)
+            if (Main.netMode != NetmodeID.Server && player.whoAmI == Main.myPlayer && (player.inventory[player.selectedItem].type == 0 || player.inventory[player.selectedItem].type == ModContent.ItemType<Box>()))
             {
                 mousePos = Main.MouseWorld;
                 dist = Vector2.Distance(player.Center, mousePos);
@@ -188,7 +188,7 @@ namespace ChestMover
                 ChestMoverPlayer mp = drawPlayer.CM();
                 Texture2D Chest = GetTexture("ChestMover/Images/ChestImagesInvis");
 
-                if (drawPlayer.CM().dist / 16f <= 4)
+                if (drawPlayer.CM().dist / 16f <= 4 && !Main.dedServ && !Main.gameMenu)
                 {
                     int drawX = (int)(mousePos.X - Main.screenPosition.X + 42);
                     int drawY = (int)(mousePos.Y - Main.screenPosition.Y + 8);
