@@ -1,8 +1,13 @@
 using ChestMover.Buffs;
+using ChestMover.Common.Packets;
+using ChestMover.Core.Networking;
 using ChestMover.Items;
+using ChestMover.Utilities;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using Terraria;
 using Terraria.DataStructures;
 using Terraria.ID;
@@ -14,8 +19,7 @@ namespace ChestMover
 {
     public class ChestMoverPlayer : ModPlayer
     {
-        public int[] itemList = new int[40];
-        public int[] itemStackList = new int[40];
+        public Item[] chestItems;
         public short ChestType = 0;
         public string ChestName;
 
@@ -29,113 +33,94 @@ namespace ChestMover
 
         public override void PreUpdate()
         {
-            if (Main.netMode != NetmodeID.Server && player.whoAmI == Main.myPlayer && (player.inventory[player.selectedItem].type == 0 || player.inventory[player.selectedItem].type == ModContent.ItemType<Box>()))
+			if (Main.netMode == NetmodeID.Server)
+			{
+				return;
+			}
+
+			if (player.whoAmI == Main.myPlayer && (player.inventory[player.selectedItem].type == 0 || player.inventory[player.selectedItem].type == ModContent.ItemType<Box>()))
             {
                 mousePos = Main.MouseWorld;
                 dist = Vector2.Distance(player.Center, mousePos);
             }
 
+			var mouseTilePos = mousePos.ToTileCoordinates16();
+
             //Picking up the chest
-            if (!GotChest && Main.mouseLeft && Main.tile[(int)mousePos.X / 16, (int)mousePos.Y / 16].type == TileID.Containers && dist / 16f <= 4 && player.inventory[player.selectedItem].type == 0 && Main.netMode != NetmodeID.Server && player.whoAmI == Main.myPlayer)
+            if (!GotChest && Main.mouseLeft && Main.tile[mouseTilePos.X, mouseTilePos.Y]?.type == TileID.Containers && dist / 16f <= 4 && player.inventory[player.selectedItem].type == ItemID.None && player.whoAmI == Main.myPlayer)
             {
                 foreach (Chest chest in Main.chest)
                 {
-                    Vector2 ChestPos = Vector2.Zero;
+					if (chest == null || (chest.x == 0 && chest.y == 0))
+					{
+						continue;
+					}
 
-                    if (chest != null)
+                    Point16 chestPos = new Point16(chest.x, chest.y);
+					var tile = Main.tile[chestPos.X, chestPos.Y];
+
+					if (tile.type == TileID.Containers && ChestUtils.CheckForChest2x2(chestPos, mousePos.ToTileCoordinates16()) && !Chest.isLocked(chest.x, chest.y))
                     {
-                        ChestPos = new Vector2(chest.x, chest.y);
-                    }
+						if (Main.netMode == NetmodeID.MultiplayerClient)
+						{
+							MultiplayerSystem.SendPacket(new AttemptChestPickupPacket(chestPos));
+							break;
+						}
 
-                    if (ChestPos != Vector2.Zero && Main.tile[chest.x, chest.y].type == TileID.Containers && checkForChest2x2(ChestPos, new Vector2((int)mousePos.X / 16, (int)mousePos.Y / 16)) && !Chest.isLocked(chest.x, chest.y))
-                    {
-                        itemList = new int[40];
-                        itemStackList = new int[40]; //Reset the lists so things can save properly (For some reason the itemStackList needs to do this when saving is involved)
-
-                        //Load the list of items (Issues with MP)
-                        for (int i = 0; i < 40; i++)
-                        {
-                            itemList[i] = chest.item[i].type;
-                            itemStackList[i] = chest.item[i].stack;
-                        }
-
-                        //Saving chest details
-                        GotChest = true;
-                        ChestType = Main.tile[chest.x, chest.y].frameX;
-                        ChestName = chest.name;
-                        inventorySpot = player.selectedItem;
-                        firstTick = false;
-
-                        //Delete everything in the chest
-                        foreach (Item item in chest.item)
-                        {
-                            item.TurnToAir();
-                        }
-
-                        //Destroy the chest
-                        DestroyChestWhole((int)ChestPos.X, (int)ChestPos.Y);
-
-                        //Create pickup sound
-                        Main.PlaySound(SoundID.DoorOpen, (int)player.Center.X, (int)player.Center.Y);
+						PickupChest(chest);
 
                         break;
                     }
                 }
             }
-
         }
 
         public override void PostUpdate()
-        {
-            if (Main.netMode != NetmodeID.Server && player.whoAmI == Main.myPlayer)
-            {
-                if (GotChest && Main.mouseRight && Main.mouseRightRelease && dist / 16f <= 4) //Issues with mp
-                {
-                    Vector2 NewChestPos = new Vector2((int)mousePos.X / 16, (int)mousePos.Y / 16);
+		{
+			if (Main.netMode == NetmodeID.Server || player.whoAmI != Main.myPlayer)
+			{
+				return;
+			}
 
-                    if (CheckChestPlacing((int)NewChestPos.X, (int)NewChestPos.Y))
-                    {
-                        PlaceChest((int)NewChestPos.X, (int)NewChestPos.Y);
-                        //WorldGen.SquareTileFrame((int)NewChestPos.X, (int)NewChestPos.Y, true);
+			if (GotChest && Main.mouseRight && Main.mouseRightRelease && dist / 16f <= 4) //Issues with mp
+			{
+				Point16 newPos = mousePos.ToTileCoordinates16();
 
-                        GotChest = false;
+				if (ChestUtils.CheckChestPlacing(newPos.X, newPos.Y))
+				{
+					PlaceChest(newPos);
+				}
+				else
+				{
+					Main.PlaySound(SoundID.Duck, (int)player.Center.X, (int)player.Center.Y);
+				}
+			}
 
-                        //Create dropoff sound
-                        Main.PlaySound(SoundID.DoorClosed, (int)player.Center.X, (int)player.Center.Y);
-                    }
-                    else Main.PlaySound(SoundID.Duck, (int)player.Center.X, (int)player.Center.Y);
-                }
+			if (GotChest && dist / 16f <= 4) {
 
-                if (GotChest && dist / 16f <= 4)
-                {
+				TileObject tileObject = default(TileObject);
+				TileObject.CanPlace(Player.tileTargetX, Player.tileTargetY, 21, (ChestType / 36), 1, out tileObject, true);
 
-                    TileObject tileObject = default(TileObject);
-                    TileObject.CanPlace(Player.tileTargetX, Player.tileTargetY, 21, (ChestType / 36), 1, out tileObject, true);
+				if (!firstTick) {
+					player.inventory[inventorySpot].SetDefaults(ModContent.ItemType<Box>());
+					firstTick = true;
+				}
+			}
 
-                    if (!firstTick)
-                    {
-                        player.inventory[inventorySpot].SetDefaults(ModContent.ItemType<Box>());
-                        firstTick = true;
-                    }
-                }
-
-                if (GotChest) player.AddBuff(ModContent.BuffType<MovingDebuff>(), 10);
+			if (GotChest) player.AddBuff(ModContent.BuffType<MovingDebuff>(), 10);
 
 
-                //Remove the item once the player gets done
-                if (!GotChest)
-                {
-                    foreach (Item slot in player.inventory)
-                    {
-                        if (slot.type == ModContent.ItemType<Box>()) slot.SetDefaults(0);
-                    }
+			//Remove the item once the player gets done
+			if (!GotChest) {
+				foreach (Item slot in player.inventory) {
+					if (slot.type == ModContent.ItemType<Box>()) slot.SetDefaults(0);
+				}
 
-                }
-            }
+			}
 
-        }
+		}
 
-        public override void SetControls() //When the player is holding a chest make it so the player can only move and not use anything
+		public override void SetControls() //When the player is holding a chest make it so the player can only move and not use anything
         {
             if (GotChest)
             {
@@ -152,8 +137,10 @@ namespace ChestMover
         #region Saving/Loading
         public override void Load(TagCompound tag)
         {
-            itemList = tag.GetIntArray(nameof(itemList));
-            itemStackList = tag.GetIntArray(nameof(itemStackList));
+			if (tag.ContainsKey(nameof(chestItems))) {
+				chestItems = tag.GetList<TagCompound>(nameof(chestItems)).Select(t => ItemIO.Load(t)).ToArray();
+			}
+
             ChestType = tag.GetAsShort(nameof(ChestType));
             ChestName = tag.GetString(nameof(ChestName));
             inventorySpot = tag.GetAsInt(nameof(inventorySpot));
@@ -163,16 +150,20 @@ namespace ChestMover
 
         public override TagCompound Save()
         {
-            return new TagCompound
+            var tag = new TagCompound
             {
-                [nameof(itemList)] = itemList,
-                [nameof(itemStackList)] = itemStackList,
                 [nameof(ChestType)] = ChestType,
                 [nameof(ChestName)] = ChestName,
                 [nameof(inventorySpot)] = inventorySpot,
                 [nameof(firstTick)] = firstTick,
                 [nameof(GotChest)] = GotChest
             };
+
+			if (chestItems != null) {
+				tag[nameof(chestItems)] = chestItems.Select(i => ItemIO.Save(i)).ToList();
+			}
+
+			return tag;
         }
         #endregion
 
@@ -249,184 +240,83 @@ namespace ChestMover
                 layers.Add(ChestInvis);
             }
         }
-        #endregion
+		#endregion
 
-        #region Methods
-        public static void DestroyChestWhole(int ChestPosX, int ChestPosY)
-        {
-            //Destroy the chest without it dropping the item - Move to a separate method to clean up the code a bit TODO
-            Chest.DestroyChest((int)ChestPosX, (int)ChestPosY);
+		public void SetHeldChest(short? chestType)
+		{
+			GotChest = chestType.HasValue;
+			ChestType = chestType ?? -1;
+		}
 
-            Main.tile[(int)ChestPosX, (int)ChestPosY].ClearTile();
-            Main.tile[(int)ChestPosX, (int)ChestPosY].active(false);
-            Main.tile[(int)ChestPosX, (int)ChestPosY].type = 0;
-            Main.tile[(int)ChestPosX, (int)ChestPosY].inActive(false);
-            Main.tile[(int)ChestPosX, (int)ChestPosY].frameNumber(0);
-            Main.tile[(int)ChestPosX, (int)ChestPosY].frameX = -1;
-            Main.tile[(int)ChestPosX, (int)ChestPosY].frameY = -1;
-            NetMessage.SendData(MessageID.TileChange, -1, -1, null, 2, (float)ChestPosX, (float)ChestPosY, 0f, 0, 0, 0);
+		//For local/server use
+		public void PickupChest(Chest chest) => PickupChestInternal(Main.tile[chest.x, chest.y].frameX, chest.name, chest.item, chest);
 
-            Main.tile[(int)ChestPosX + 1, (int)ChestPosY + 1].ClearTile();
-            Main.tile[(int)ChestPosX + 1, (int)ChestPosY + 1].active(false);
-            Main.tile[(int)ChestPosX + 1, (int)ChestPosY + 1].type = 0;
-            Main.tile[(int)ChestPosX + 1, (int)ChestPosY + 1].inActive(false);
-            Main.tile[(int)ChestPosX + 1, (int)ChestPosY + 1].frameNumber(0);
-            Main.tile[(int)ChestPosX + 1, (int)ChestPosY + 1].frameX = -1;
-            Main.tile[(int)ChestPosX + 1, (int)ChestPosY + 1].frameY = -1;
-            NetMessage.SendData(MessageID.TileChange, -1, -1, null, 2, (float)ChestPosX + 1, (float)ChestPosY + 1, 0f, 0, 0, 0);
+		//For multiplayer clients that do not own this player
+		public void PickupChest(short chestType) => PickupChestInternal(chestType);
 
-            Main.tile[(int)ChestPosX + 1, (int)ChestPosY].ClearTile();
-            Main.tile[(int)ChestPosX + 1, (int)ChestPosY].active(false);
-            Main.tile[(int)ChestPosX + 1, (int)ChestPosY].type = 0;
-            Main.tile[(int)ChestPosX + 1, (int)ChestPosY].inActive(false);
-            Main.tile[(int)ChestPosX + 1, (int)ChestPosY].frameNumber(0);
-            Main.tile[(int)ChestPosX + 1, (int)ChestPosY].frameX = -1;
-            Main.tile[(int)ChestPosX + 1, (int)ChestPosY].frameY = -1;
-            NetMessage.SendData(MessageID.TileChange, -1, -1, null, 2, (float)ChestPosX + 1, (float)ChestPosY, 0f, 0, 0, 0);
+		//For multiplayer clients that own this player
+		public void PickupChest(short chestType, string chestName, Item[] items) => PickupChestInternal(chestType, chestName, items);
 
-            Main.tile[(int)ChestPosX, (int)ChestPosY + 1].ClearTile();
-            Main.tile[(int)ChestPosX, (int)ChestPosY + 1].active(false);
-            Main.tile[(int)ChestPosX, (int)ChestPosY + 1].type = 0;
-            Main.tile[(int)ChestPosX, (int)ChestPosY + 1].inActive(false);
-            Main.tile[(int)ChestPosX, (int)ChestPosY + 1].frameNumber(0);
-            Main.tile[(int)ChestPosX, (int)ChestPosY + 1].frameX = 1;
-            Main.tile[(int)ChestPosX, (int)ChestPosY + 1].frameY = -1;
-            NetMessage.SendData(MessageID.TileChange, -1, -1, null, 2, (float)ChestPosX, (float)ChestPosY + 1, 0f, 0, 0, 0);
+		public void PlaceChest(Point16 chestPos)
+		{
+			GotChest = false;
 
-            WorldGen.SquareTileFrame((int)ChestPosX, (int)ChestPosY, true);
-            WorldGen.SquareTileFrame((int)ChestPosX + 1, (int)ChestPosY + 1, true);
-            WorldGen.SquareTileFrame((int)ChestPosX + 1, (int)ChestPosY, true);
-            WorldGen.SquareTileFrame((int)ChestPosX, (int)ChestPosY + 1, true);
-        }
+			if (Main.myPlayer == player.whoAmI)
+			{
+				int chestId = ChestUtils.PlaceChest(chestPos.X, chestPos.Y);
 
-        public static bool checkForChest2x2(Vector2 Chestpos, Vector2 mousepos)
-        {
-            if (Chestpos == mousepos ||
-               Chestpos == new Vector2(mousepos.X - 1, mousepos.Y) ||
-               Chestpos == new Vector2(mousepos.X, mousepos.Y - 1) ||
-               Chestpos == new Vector2(mousepos.X - 1, mousepos.Y - 1))
-            {
-                return true;
-            }
+				if (Main.netMode == NetmodeID.MultiplayerClient)
+				{
+					MultiplayerSystem.SendPacket(new SetChestContentsPacket(chestId, chestItems));
+					MultiplayerSystem.SendPacket(new VisualChestPlacePacket(chestPos));
+				}
 
-            return false;
-        }
+				chestItems = null;
+			}
 
-        public static bool CheckChestPlacing(int i, int j)
-        {
-            if (Main.tile[i, j].type == 3 || Main.tile[i, j].type == 73) //check for grass
-            {
-                WorldGen.KillTile(i, j);
+			//Create dropoff sound
+			if (!Main.dedServ)
+			{
+				Main.PlaySound(SoundID.DoorClosed, player.Center);
+			}
+		}
 
-            }
-            if (Main.tile[i + 1, j].type == 3 || Main.tile[i + 1, j].type == 73)
-            {
-                WorldGen.KillTile(i + 1, j);
+		private void PickupChestInternal(short chestType, string chestName = null, Item[] items = null, Chest chest = null)
+		{
+			if (items != null && player.whoAmI == Main.myPlayer)
+			{
+				Array.Resize(ref chestItems, items.Length);
+				Array.Copy(items, chestItems, items.Length);
+			}
 
-            }
-            if (!WorldGen.TileEmpty(i, j + 1) && //Check the bottom one from the pos
-                !WorldGen.TileEmpty(i + 1, j + 1) && //Check the bottom one from the pos but right one
-                Main.tile[i, j].active() == false &&
-                Main.tile[i + 1, j].active() == false &&
-                Main.tile[i, j + 1].halfBrick() == false && //Make sure the player doesn't place on slabs
-                Main.tile[i + 1, j + 1].halfBrick() == false &&
-                WorldGen.TileEmpty(i, j - 1) && //Check the top one from the pos
-                WorldGen.TileEmpty(i + 1, j - 1) &&
-                Main.tileSolid[Main.tile[i, j + 1].type] &&
-                Main.tileSolid[Main.tile[i + 1, j + 1].type])
-            {
+			if (chest != null)
+			{
+				//Delete everything in the chest
+				for (int i = 0; i < chest.item.Length; i++) {
+					chest.item[i] = new Item();
+				}
 
-                return true;
-            }
+				//Destroy the chest
+				ChestUtils.RemoveChest(chest);
+			}
 
-            return false;
-        }
-        public static int PlaceChest(int x, int y, ushort type = 21, bool notNearOtherChests = false, int style = 0)
-        {
-            int num = -1;
-            TileObject tileObject = default(TileObject);
-            if (TileObject.CanPlace(x, y, (int)type, style, 1, out tileObject, false, false))
-            {
-                bool flag = true;
-                if (notNearOtherChests && Chest.NearOtherChests(x - 1, y - 1))
-                {
-                    flag = false;
-                }
-                if (flag)
-                {
-                    TileObject.Place(tileObject);
-                    num = CreateChest(tileObject.xCoord, tileObject.yCoord, -1);
-                }
-            }
-            else
-            {
-                num = -1;
-            }
-            if (num != -1 && Main.netMode == 1 && type == 21)
-            {
-                NetMessage.SendData(34, -1, -1, null, 0, (float)x, (float)y, (float)style, 0, 0, 0);
-            }
-            if (num != -1 && Main.netMode == 1 && type == 467)
-            {
-                NetMessage.SendData(34, -1, -1, null, 4, (float)x, (float)y, (float)style, 0, 0, 0);
-            }
-            if (num != 1 && Main.netMode == 1 && type >= 470 && TileID.Sets.BasicChest[type])
-            {
-                NetMessage.SendData(34, -1, -1, null, 100, (float)x, (float)y, (float)style, 0, type, 0);
-            }
-            return num;
-        }
+			//Saving chest details
 
-        public static int CreateChest(int X, int Y, int id = -1)
-        {
-            Player player = Main.player[Main.myPlayer];
+			SetHeldChest(chestType);
 
-            int num = id;
-            if (num == -1)
-            {
-                num = Chest.FindEmptyChest(X, Y, 21, 0, 1);
-                if (num == -1)
-                {
-                    return -1;
-                }
-                if (Main.netMode == 1)
-                {
-                    return num;
-                }
-            }
-            Main.chest[num] = new Chest(false);
-            Main.chest[num].x = X;
-            Main.chest[num].y = Y;
-            for (int i = 0; i < 40; i++) //Initiate the new slots
-            {
-                Main.chest[num].item[i] = new Item();
-            }
+			if (player.whoAmI == Main.myPlayer)
+			{
+				ChestName = chestName;
+				inventorySpot = player.selectedItem;
+				firstTick = false;
+			}
 
-            //Add the items to the chest from the old
-            for (int i = 0; i < 40; i++)
-            {
-                Main.chest[num].item[i].SetDefaults(player.CM().itemList[i]);
-                Main.chest[num].item[i].stack = player.CM().itemStackList[i];
-
-            }
-
-            //Set the chest to the chest type that was broken
-            Main.tile[X, Y].frameX = player.CM().ChestType;
-            Main.tile[X + 1, Y + 1].frameX = (short)(player.CM().ChestType + 18);
-            Main.tile[X + 1, Y].frameX = (short)(player.CM().ChestType + 18);
-            Main.tile[X, Y + 1].frameX = player.CM().ChestType;
-
-            Main.chest[num].name = player.CM().ChestName;
-
-            //netstuff
-            NetMessage.SendData(34, -1, -1, null, 0, (float)X, (float)Y, (float)(int)player.CM().ChestType / 16, 0, 0, 0);
-            NetMessage.SendData(34, -1, -1, null, 100, (float)X, (float)Y, (float)(int)player.CM().ChestType / 16, 0, 21, 0);
-
-            Chest.UpdateChestFrames();
-
-            return num;
-        }
-        #endregion
+			//Create pickup sound
+			if (!Main.dedServ)
+			{
+				Main.PlaySound(SoundID.DoorOpen, (int)player.Center.X, (int)player.Center.Y);
+			}
+		}
     }
 
     public static class ClassExtensions
